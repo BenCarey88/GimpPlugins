@@ -253,7 +253,12 @@ class Selection(object):
 				layers keyed by the block row they should be added to.
 		"""
 		for block_row, word_layers in word_layers_by_row.items():
-			
+			total_word_width = sum(
+				word_layer.width for word_layer in word_layers
+			)
+			text_start = total_word_width / 
+			for word_layer in word_layers:
+
 
 
 	def _get_min_num_rows(self, word_layers):
