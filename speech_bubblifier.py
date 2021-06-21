@@ -102,9 +102,9 @@ class BlockRow(object):
       +---------------+
          .............
 	"""
-	def __init__(self, selection, top):
-		self.selection = selection
-		self.height = selection.row_height
+	def __init__(self, speech_bubble, top):
+		self.speech_bubble = speech_bubble
+		self.height = speech_bubble.row_height
 		self.top = top
 		self.bottom = top + self.height
 		self._compute_horizontal_bounds()
@@ -115,14 +115,14 @@ class BlockRow(object):
 		self.right = None
 		self.width = 0
 		for y in range(self.top, self.bottom):
-			bounds = self.selection.get_pixel_row_bounds(y)
+			bounds = self.speech_bubble.get_pixel_row_bounds(y)
 			if not bounds:
 				return
 			if not self.left or bounds[0] > self.left:
-				self.left = bounds[0]
+				self.left = bounds[0] + self.speech_bubble.horizontal_offset
 			if not self.right or bounds[1] < self.right:
-				self.right = bounds[1]
-		if self.left and self.right:
+				self.right = bounds[1] - self.speech_bubble.horizontal_offset
+		if self.left and self.right and self.right > self.left:
 			self.width = self.right - self.left
 
 
@@ -137,16 +137,19 @@ class SpeechBubble(object):
 			y_max,
 			row_height,
 			space_width,
+			horizontal_offset,
+			vertical_offset,
 			):
 		self.selection = gimp_selection
 		self.x_min = x_min
-		self.y_min = y_min
+		self.y_min = y_min + vertical_offset
 		self.x_max = x_max
-		self.y_max = y_max
+		self.y_max = y_max - vertical_offset
 		self.height = y_max - y_min
 		self.width = x_max - x_min
 		self.row_height = row_height
 		self.space_width = space_width
+		self.horizontal_offset = horizontal_offset
 		self._compute_pixel_row_bounds()
 		self._compute_block_rows()
 
@@ -345,14 +348,6 @@ class SpeechBubble(object):
 		for i in reversed(range(num_steps)):
 			yield block_rows[n - 2*i - 1]
 
-############################################
-"""
-TO DO:
-
-- Sort layer addition to specify which group we add to
-- Add offset from horizontal edges of bubble (maybe as parameter?)
-"""
-############################################
 
 # Main function
 def speech_bubblifier(
@@ -362,66 +357,46 @@ def speech_bubblifier(
 		text,
 		text_size,
 		color,
-		space_width
+		space_width,
+		horizontal_offset,
+		vertical_offset,
 		):
-	# get bounds of current selection (which should be speech bubble)
+	# get bounds of current selection (which should be the speech bubble)
 	non_empty, x_min, y_min, x_max, y_max = pdb.gimp_selection_bounds(timg)
 	if not non_empty:
 		raise NoSelectionError()
 	gimp_selection = timg.selection
+
 	text_group_layer = pdb.gimp_layer_group_new(timg)
 	text_group_layer.name = "text group"
-	timg.add_layer(text_group_layer)
+	pdb.gimp_image_insert_layer(timg, text_group_layer, None, -1)
 
-	black = gimpcolor.RGB(0,0,0)
 	words = text.split()
 	word_layers = []
 	for word in words:
 		word_layer = pdb.gimp_text_layer_new(timg, word, font, text_size, 0)
 		word_layer.name = word
-		timg.add_layer(word_layer)
+		pdb.gimp_image_insert_layer(timg, word_layer, text_group_layer, -1)
 		pdb.gimp_text_layer_set_color(word_layer, color)
 		word_layers.append(WordLayer(word_layer))
-		# pdb.gimp_image_select_color(
-		# 	timg,
-		# 	gimpenums.CHANNEL_OP_REPLACE,
-		# 	word_layer,
-		# 	black
-		# )
-		# non_empty, _x_min, _y_min, _x_max, _y_max = pdb.gimp_selection_bounds(timg)
-		# word_layers.append(WordLayer(word_layer, _x_min, _y_min, _x_max, _y_max))
 	row_height = max(word_layer.height for word_layer in word_layers)
 
-	#speech_bubble = SpeechBubble(gimp_selection, x_min, y_min, x_max, y_max, row_height)
-	speech_bubble = SpeechBubble(
-		gimp_selection,
-		x_min,
-		y_min,
-		x_max,
-		y_max,
-		row_height,
-		space_width
-	)
-	speech_bubble.place_words(word_layers)
-
-	# for block_row in selection.odd_block_rows:
-	# 	if not block_row.left or not block_row.right:
-	# 		continue
-	# 	pdb.gimp_palette_set_foreground(
-	# 		gimpcolor.RGB(236,0,0)
-	# 	)
-	# 	pdb.gimp_image_select_rectangle(
-	# 		timg,
-	# 		gimpenums.CHANNEL_OP_REPLACE,
-	# 		block_row.left,
-	# 		block_row.top,
-	# 		block_row.right - block_row.left,
-	# 		20
-	# 	)
-	# 	pdb.gimp_drawable_edit_fill(
-	# 		tdrawable,
-	# 		gimpenums.FOREGROUND_FILL
-	# 	)
+	try:
+		speech_bubble = SpeechBubble(
+			gimp_selection,
+			x_min,
+			y_min,
+			x_max,
+			y_max,
+			row_height,
+			space_width,
+			horizontal_offset,
+			vertical_offset,
+		)
+		speech_bubble.place_words(word_layers)
+	except Exception as e:
+		pdb.gimp_image_remove_layer(timg, text_group_layer)
+		raise e
 
 
 # Register function
@@ -440,6 +415,8 @@ register(
 		(PF_INT, "pf_text_size", "Text Size", 60),
 		(PF_COLOR, "pf_text_color", "Text Color", gimpcolor.RGB(0,0,0)),
 		(PF_INT, "pf_space_width", "Space Width", 15),
+		(PF_INT, "pf_horizontal_offset", "Horizontal Offset", 10),
+		(PF_INT, "pf_vertical_offset", "Vertical Offset", 10),
 	],
 	[],
 	speech_bubblifier
