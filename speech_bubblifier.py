@@ -35,15 +35,26 @@ class NoSelectionError(Exception):
 # Classes
 class WordLayer(object):
 	"""Struct to encapsulate data for word layers"""
-	def __init__(self, layer, x_min, y_min, x_max, y_max):
+	def __init__(self, layer):
 		self.layer = layer
-		self.x_min = x_min
-		self.y_min = y_min
-		self.x_max = x_max
-		self.y_max = y_max
-		self.height = y_max - y_min
-		self.width = x_max - x_min
+		self.x_min = layer.offsets[0]
+		self.y_min = layer.offsets[1]
+		self.height = layer.height
+		self.width = layer.width
 
+	def move_to(self, x_pos, y_pos):
+		"""Move word layer to specified position and update attributes.
+
+		Args:
+			x_pos (int): x pos of top left hand corner of new position.
+			y_pos (int): y pos of top left hand corner of new position.
+		"""
+		self.layer.translate(
+			int(x_pos - self.x_min),
+			int(y_pos - self.y_min),
+		)
+		self.x_min = x_pos
+		self.y_min = y_pos
 
 class BlockRow(object):
 	"""Class to represent a block row of a selected area.
@@ -102,6 +113,7 @@ class BlockRow(object):
 		"""Find left and right bounds of block row."""
 		self.left = None
 		self.right = None
+		self.width = 0
 		for y in range(self.top, self.bottom):
 			bounds = self.selection.get_pixel_row_bounds(y)
 			if not bounds:
@@ -110,14 +122,22 @@ class BlockRow(object):
 				self.left = bounds[0]
 			if not self.right or bounds[1] < self.right:
 				self.right = bounds[1]
-		self.width = 0
 		if self.left and self.right:
 			self.width = self.right - self.left
 
 
-class Selection(object):
-	"""Class to interact with gimp selections and split into block rows."""
-	def __init__(self, gimp_selection, x_min, y_min, x_max, y_max, row_height):
+class SpeechBubble(object):
+	"""Class to interact with speech bubble and split into block rows."""
+	def __init__(
+			self,
+			gimp_selection,
+			x_min,
+			y_min,
+			x_max,
+			y_max,
+			row_height,
+			space_width,
+			):
 		self.selection = gimp_selection
 		self.x_min = x_min
 		self.y_min = y_min
@@ -126,6 +146,7 @@ class Selection(object):
 		self.height = y_max - y_min
 		self.width = x_max - x_min
 		self.row_height = row_height
+		self.space_width = space_width
 		self._compute_pixel_row_bounds()
 		self._compute_block_rows()
 
@@ -192,7 +213,7 @@ class Selection(object):
 					BlockRow(self, odd_row_higher),
 					BlockRow(self, odd_row_lower)
 				])
-		self.max_rows = max(len(self.odd_block_rows, self.even_block_rows))
+		self.max_num_rows = max(len(self.odd_block_rows), len(self.even_block_rows))
 
 	def place_words(self, word_layers):
 		"""Place words in selection.
@@ -205,9 +226,9 @@ class Selection(object):
 				representing text to add.
 		"""
 		min_num_rows = self._get_min_num_rows(word_layers)
-		if not min_num_rows:
+		if min_num_rows is None:
 			raise SelectionSizeError()
-		for num_rows in range(min_num_rows, self.max_rows):
+		for num_rows in range(min_num_rows, self.max_num_rows):
 			block_row_generator = self._get_block_rows(num_rows)
 			block_row = next(block_row_generator)
 			word_layers_by_row = {}
@@ -228,6 +249,7 @@ class Selection(object):
 					word_layers_by_row.setdefault(block_row, []).append(
 						word_layer
 					)
+					cumulative_word_width += self.space_width
 					continue
 				# if we get here, we hit StopIteration above
 				# break and try again with higher num_rows
@@ -256,10 +278,12 @@ class Selection(object):
 			total_word_width = sum(
 				word_layer.width for word_layer in word_layers
 			)
-			text_start = total_word_width / 
+			text_start = block_row.left + 0.5 * int(
+				math.floor((block_row.width - total_word_width))
+			)
 			for word_layer in word_layers:
-
-
+				word_layer.move_to(text_start, block_row.top)
+				text_start += word_layer.width + self.space_width
 
 	def _get_min_num_rows(self, word_layers):
 		"""Get minimum number of block rows needed to add text.
@@ -321,78 +345,83 @@ class Selection(object):
 		for i in reversed(range(num_steps)):
 			yield block_rows[n - 2*i - 1]
 
+############################################
+"""
+TO DO:
+
+- Sort layer addition to specify which group we add to
+- Add offset from horizontal edges of bubble (maybe as parameter?)
+"""
+############################################
 
 # Main function
-def speech_bubblifier(timg, tdrawable, font, text, size):
+def speech_bubblifier(
+		timg,
+		tdrawable,
+		font,
+		text,
+		text_size,
+		color,
+		space_width
+		):
 	# get bounds of current selection (which should be speech bubble)
 	non_empty, x_min, y_min, x_max, y_max = pdb.gimp_selection_bounds(timg)
 	if not non_empty:
 		raise NoSelectionError()
-		return
 	gimp_selection = timg.selection
 	text_group_layer = pdb.gimp_layer_group_new(timg)
-	text_group_layer = "text group"
+	text_group_layer.name = "text group"
 	timg.add_layer(text_group_layer)
 
 	black = gimpcolor.RGB(0,0,0)
 	words = text.split()
 	word_layers = []
 	for word in words:
-		print (word)
-		word_layer = pdb.gimp_text_layer_new(timg, word, font, size, 0)
+		word_layer = pdb.gimp_text_layer_new(timg, word, font, text_size, 0)
 		word_layer.name = word
 		timg.add_layer(word_layer)
-		pdb.gimp_text_layer_set_color(word_layer, black)
-		pdb.gimp_image_select_color(
-			timg,
-			gimpenums.CHANNEL_OP_REPLACE,
-			word_layer,
-			black
-		)
-		non_empty, _x_min, _y_min, _x_max, _y_max = pdb.gimp_selection_bounds(timg)
-		word_layers.append(WordLayer(word_layer, _x_min, _y_min, _x_max, _y_max))
+		pdb.gimp_text_layer_set_color(word_layer, color)
+		word_layers.append(WordLayer(word_layer))
+		# pdb.gimp_image_select_color(
+		# 	timg,
+		# 	gimpenums.CHANNEL_OP_REPLACE,
+		# 	word_layer,
+		# 	black
+		# )
+		# non_empty, _x_min, _y_min, _x_max, _y_max = pdb.gimp_selection_bounds(timg)
+		# word_layers.append(WordLayer(word_layer, _x_min, _y_min, _x_max, _y_max))
 	row_height = max(word_layer.height for word_layer in word_layers)
 
-	selection = Selection(gimp_selection, x_min, y_min, x_max, y_max, row_height)
-	selection.place_words(word_layers)
+	#speech_bubble = SpeechBubble(gimp_selection, x_min, y_min, x_max, y_max, row_height)
+	speech_bubble = SpeechBubble(
+		gimp_selection,
+		x_min,
+		y_min,
+		x_max,
+		y_max,
+		row_height,
+		space_width
+	)
+	speech_bubble.place_words(word_layers)
 
-	for block_row in selection.odd_block_rows:
-		if not block_row.left or not block_row.right:
-			continue
-		pdb.gimp_palette_set_foreground(
-			gimpcolor.RGB(236,0,0)
-		)
-		pdb.gimp_image_select_rectangle(
-			timg,
-			gimpenums.CHANNEL_OP_REPLACE,
-			block_row.left,
-			block_row.top,
-			block_row.right - block_row.left,
-			20
-		)
-		pdb.gimp_drawable_edit_fill(
-			tdrawable,
-			gimpenums.FOREGROUND_FILL
-		)
-
-	return
-
-	black = gimpcolor.RGB(0,0,0)
-	words = text.split()
-	word_layers = []
-	for word in words:
-		print (word)
-		word_layer = pdb.gimp_text_layer_new(timg, word, font, size, 0)
-		timg.add_layer(word_layer)
-		pdb.gimp_text_layer_set_color(word_layer, black)
-		pdb.gimp_image_select_color(
-			timg,
-			gimpenums.CHANNEL_OP_REPLACE,
-			word_layer,
-			black
-		)
-		non_empty, _x_min, _y_min, _x_max, _y_max = pdb.gimp_selection_bounds(timg)
-		word_layers.append(WordLayer(word_layer, _x_min, _y_min, _x_max, _y_max))
+	# for block_row in selection.odd_block_rows:
+	# 	if not block_row.left or not block_row.right:
+	# 		continue
+	# 	pdb.gimp_palette_set_foreground(
+	# 		gimpcolor.RGB(236,0,0)
+	# 	)
+	# 	pdb.gimp_image_select_rectangle(
+	# 		timg,
+	# 		gimpenums.CHANNEL_OP_REPLACE,
+	# 		block_row.left,
+	# 		block_row.top,
+	# 		block_row.right - block_row.left,
+	# 		20
+	# 	)
+	# 	pdb.gimp_drawable_edit_fill(
+	# 		tdrawable,
+	# 		gimpenums.FOREGROUND_FILL
+	# 	)
 
 
 # Register function
@@ -407,8 +436,10 @@ register(
 	"*",
 	[
 		(PF_FONT, "pf_font", "Choose Font", "Comic Sans MS"),
-		(PF_STRING, "pf_text", "Write Text", ""),
-		(PF_FLOAT, "pf_text_size", "Text size", 60),
+		(PF_STRING, "pf_text", "Text", ""),
+		(PF_INT, "pf_text_size", "Text Size", 60),
+		(PF_COLOR, "pf_text_color", "Text Color", gimpcolor.RGB(0,0,0)),
+		(PF_INT, "pf_space_width", "Space Width", 15),
 	],
 	[],
 	speech_bubblifier
