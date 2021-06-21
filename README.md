@@ -1,0 +1,2 @@
+# GimpPlugins
+Plugins for gimp
